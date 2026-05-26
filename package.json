@@ -1,5 +1,5 @@
 {
-	"name": "@ibrkanac/pi-slash-agent",
+	"name": "pi-slash-agent",
 	"version": "0.1.0",
 	"description": "Pi extension that exposes explicit /subagent and /subagents slash commands without registering an LLM tool.",
 	"type": "module",
@@ -52,6 +52,6 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/ibrkanac/pi-slash-agent"
+		"url": "https://github.com/ibeex/pi-slash-agent"
 	}
 }
