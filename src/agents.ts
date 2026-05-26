@@ -25,6 +25,31 @@ const BUILT_IN_AGENTS_DIR = path.join(
 	"agents",
 );
 
+function normalizeFrontmatterText(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed || undefined;
+}
+
+function normalizeTools(value: unknown): string[] | undefined {
+	const items =
+		typeof value === "string"
+			? value.split(",")
+			: Array.isArray(value)
+				? value
+				: undefined;
+	if (!items) return undefined;
+
+	const tools = items
+		.map((item) => (typeof item === "string" ? item.trim() : ""))
+		.filter(Boolean);
+	return tools.length > 0 ? tools : undefined;
+}
+
+function compareAgents(a: AgentConfig, b: AgentConfig): number {
+	return a.name.localeCompare(b.name) || a.source.localeCompare(b.source);
+}
+
 function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
@@ -34,7 +59,9 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 
 	let entries: fs.Dirent[];
 	try {
-		entries = fs.readdirSync(dir, { withFileTypes: true });
+		entries = fs
+			.readdirSync(dir, { withFileTypes: true })
+			.sort((a, b) => a.name.localeCompare(b.name));
 	} catch {
 		return agents;
 	}
@@ -52,18 +79,15 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 		}
 
 		const { frontmatter, body } =
-			parseFrontmatter<Record<string, string>>(content);
-		if (!frontmatter.name || !frontmatter.description) continue;
-
-		const tools = frontmatter.tools
-			?.split(",")
-			.map((t: string) => t.trim())
-			.filter(Boolean);
+			parseFrontmatter<Record<string, unknown>>(content);
+		const name = normalizeFrontmatterText(frontmatter.name);
+		const description = normalizeFrontmatterText(frontmatter.description);
+		if (!name || !description) continue;
 
 		agents.push({
-			name: frontmatter.name,
-			description: frontmatter.description,
-			tools: tools && tools.length > 0 ? tools : undefined,
+			name,
+			description,
+			tools: normalizeTools(frontmatter.tools),
 			systemPrompt: body,
 			source,
 			filePath,
@@ -109,7 +133,7 @@ export function discoverAgents(cwd = process.cwd()): AgentDiscoveryResult {
 	for (const agent of projectAgents) agentMap.set(agent.name, agent);
 
 	return {
-		agents: Array.from(agentMap.values()),
+		agents: Array.from(agentMap.values()).sort(compareAgents),
 		userAgentsDir,
 		projectAgentsDir,
 	};

@@ -375,13 +375,23 @@ function formatResultMeta(result: SingleResult): string {
 	return parts.join(" · ");
 }
 
+function getAssistantTextContent(message: Message): string {
+	if (!Array.isArray(message.content)) return "";
+	const textParts: string[] = [];
+	for (const part of message.content) {
+		if (part.type !== "text") continue;
+		const text = part.text.trim();
+		if (text) textParts.push(text);
+	}
+	return textParts.join("\n\n");
+}
+
 function getFinalOutput(messages: Message[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role !== "assistant") continue;
-		for (const part of msg.content) {
-			if (part.type === "text") return part.text;
-		}
+		const text = getAssistantTextContent(msg);
+		if (text) return text;
 	}
 	return "";
 }

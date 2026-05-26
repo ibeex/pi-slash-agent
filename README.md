@@ -2,7 +2,7 @@
 
 `pi-slash-agent` is a Pi extension that adds explicit slash commands for isolated subagents and workflow handoffs:
 
-- `/subagent <agent> <task>`
+- `/subagent <agent> [--no-handoff] <task>`
 - `/subagents`
 - `/scout-and-plan <task>`
 - `/implement <task>`
@@ -203,7 +203,7 @@ Each step still runs in its own isolated Pi subprocess. The extension captures o
 
 ## Agent format
 
-User and project-local agents are markdown files with frontmatter:
+User and project-local agents are markdown files with frontmatter. `tools` can be a comma-separated string or a YAML list:
 
 ```md
 ---
