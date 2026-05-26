@@ -1,10 +1,19 @@
 ---
-description: Full implementation workflow - scout gathers context, planner creates plan, worker implements
+description: Reference for the built-in /implement workflow
 ---
-Use the subagent tool with the chain parameter to execute this workflow:
+This workflow is now implemented directly by the extension as a slash command.
 
-1. First, use the "scout" agent to find all code relevant to: $@
-2. Then, use the "planner" agent to create an implementation plan for "$@" using the context from the previous step (use {previous} placeholder)
-3. Finally, use the "worker" agent to implement the plan from the previous step (use {previous} placeholder)
+Preferred usage:
 
-Execute this as a chain, passing output between steps via {previous}.
+```text
+/implement $@
+```
+
+Behavior:
+1. Run `scout` on the request: $@
+2. Capture the scout's final output as an explicit handoff
+3. Run `planner` with the original request plus scout context
+4. Run `worker` with:
+   - the original request
+   - the scout handoff
+   - the planner handoff

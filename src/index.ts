@@ -87,6 +87,19 @@ interface SubagentListDetails {
 	projectAgentsDir: string | null;
 }
 
+interface HandoffBuffer {
+	sourceAgent: string;
+	sourceTask: string;
+	output: string;
+	savedAt: number;
+}
+
+interface HandoffStatusDetails {
+	action: "show" | "saved" | "used" | "cleared";
+	handoff?: HandoffBuffer;
+	targetAgent?: string;
+}
+
 function createUsageStats(): UsageStats {
 	return {
 		input: 0,
@@ -311,6 +324,10 @@ function getCollapsedOutputPreview(text: string): {
 
 function formatTaskPreview(task: string): string {
 	return truncateText(collapseWhitespace(task), 96);
+}
+
+function formatSavedAge(savedAt: number): string {
+	return formatDuration(Math.max(0, Date.now() - savedAt));
 }
 
 function getResultState(result: SingleResult): {
@@ -717,15 +734,199 @@ async function runSubagent(
 
 function parseCommandArgs(
 	args: string,
-): { agent: string; task: string } | undefined {
+): { agent: string; task: string; noHandoff: boolean } | undefined {
 	const trimmed = args.trim();
 	if (!trimmed) return undefined;
 	const firstSpace = trimmed.search(/\s/);
 	if (firstSpace === -1) return undefined;
 	const agent = trimmed.slice(0, firstSpace).trim();
-	const task = trimmed.slice(firstSpace + 1).trim();
-	if (!agent || !task) return undefined;
-	return { agent, task };
+	let remainder = trimmed.slice(firstSpace + 1).trim();
+	if (!agent || !remainder) return undefined;
+
+	let noHandoff = false;
+	while (true) {
+		if (remainder === "--no-handoff") {
+			noHandoff = true;
+			remainder = "";
+			break;
+		}
+		if (remainder.startsWith("--no-handoff ")) {
+			noHandoff = true;
+			remainder = remainder.slice("--no-handoff".length).trim();
+			continue;
+		}
+		break;
+	}
+
+	const task = remainder.trim();
+	if (!task) return undefined;
+	return { agent, task, noHandoff };
+}
+
+function parseTaskArgs(args: string): string | undefined {
+	const task = args.trim();
+	return task ? task : undefined;
+}
+
+function didSubagentFail(result: SingleResult): boolean {
+	return (
+		result.exitCode !== 0 ||
+		result.timedOut === true ||
+		result.stopReason === "error" ||
+		result.stopReason === "aborted"
+	);
+}
+
+function formatHandoffOutput(label: string, output: string): string {
+	const trimmed = output.trim();
+	return trimmed || `(${label} returned no final output)`;
+}
+
+function canonicalAgentName(agentName: string): string {
+	switch (agentName) {
+		case "general":
+		case "general-purpose":
+			return "worker";
+		default:
+			return agentName;
+	}
+}
+
+function buildPlannerTask(originalTask: string, scoutOutput: string): string {
+	return [
+		"Original request:",
+		originalTask.trim(),
+		"",
+		"Context from scout:",
+		formatHandoffOutput("scout", scoutOutput),
+	].join("\n");
+}
+
+function buildWorkerTask(
+	originalTask: string,
+	scoutOutput: string,
+	plannerOutput: string,
+): string {
+	return [
+		"Original request:",
+		originalTask.trim(),
+		"",
+		"Context from scout:",
+		formatHandoffOutput("scout", scoutOutput),
+		"",
+		"Implementation plan from planner:",
+		formatHandoffOutput("planner", plannerOutput),
+	].join("\n");
+}
+
+function buildWorkerTaskFromScout(
+	originalTask: string,
+	scoutOutput: string,
+): string {
+	return [
+		"Original request:",
+		originalTask.trim(),
+		"",
+		"Context from scout:",
+		formatHandoffOutput("scout", scoutOutput),
+		"",
+		"Use the scout context above to implement the request.",
+	].join("\n");
+}
+
+function buildWorkerTaskFromPlanner(
+	originalTask: string,
+	plannerOutput: string,
+): string {
+	return [
+		"Original request:",
+		originalTask.trim(),
+		"",
+		"Implementation plan from planner:",
+		formatHandoffOutput("planner", plannerOutput),
+		"",
+		"Implement the request by following the plan above.",
+	].join("\n");
+}
+
+function buildReviewerTask(originalTask: string, workerOutput: string): string {
+	return [
+		"Original request:",
+		originalTask.trim(),
+		"",
+		"Implementation summary from worker:",
+		formatHandoffOutput("worker", workerOutput),
+		"",
+		"Review the implementation for correctness, quality, and risk. Do not modify files.",
+	].join("\n");
+}
+
+function buildWorkerTaskFromReviewer(
+	originalTask: string,
+	reviewerOutput: string,
+): string {
+	return [
+		"Original request:",
+		originalTask.trim(),
+		"",
+		"Review feedback from reviewer:",
+		formatHandoffOutput("reviewer", reviewerOutput),
+		"",
+		"Apply the reviewer feedback where appropriate, then summarize the final changes.",
+	].join("\n");
+}
+
+function buildRevisionTask(
+	originalTask: string,
+	workerOutput: string,
+	reviewerOutput: string,
+): string {
+	return [
+		"Original request:",
+		originalTask.trim(),
+		"",
+		"Previous implementation summary from worker:",
+		formatHandoffOutput("worker", workerOutput),
+		"",
+		"Review feedback from reviewer:",
+		formatHandoffOutput("reviewer", reviewerOutput),
+		"",
+		"Apply the reviewer feedback where appropriate, then summarize the final changes.",
+	].join("\n");
+}
+
+function buildTaskFromHandoff(
+	targetAgentName: string,
+	originalTask: string,
+	handoff: HandoffBuffer,
+): string | undefined {
+	const target = canonicalAgentName(targetAgentName);
+	const source = canonicalAgentName(handoff.sourceAgent);
+	if (!handoff.output.trim()) return undefined;
+
+	switch (target) {
+		case "planner":
+			return source === "scout"
+				? buildPlannerTask(originalTask, handoff.output)
+				: undefined;
+		case "worker":
+			if (source === "scout") {
+				return buildWorkerTaskFromScout(originalTask, handoff.output);
+			}
+			if (source === "planner") {
+				return buildWorkerTaskFromPlanner(originalTask, handoff.output);
+			}
+			if (source === "reviewer") {
+				return buildWorkerTaskFromReviewer(originalTask, handoff.output);
+			}
+			return undefined;
+		case "reviewer":
+			return source === "worker"
+				? buildReviewerTask(originalTask, handoff.output)
+				: undefined;
+		default:
+			return undefined;
+	}
 }
 
 function getAgentAutocompleteScore(agent: AgentConfig, query: string): number {
@@ -776,6 +977,73 @@ function makeAgentCompletions(prefix: string): AutocompleteItem[] | null {
 }
 
 export default function slashSubagentExtension(pi: ExtensionAPI) {
+	let handoffBuffer: HandoffBuffer | undefined;
+
+	pi.registerMessageRenderer(
+		"handoff-status",
+		(message, { expanded }, theme) => {
+			const details = message.details as HandoffStatusDetails | undefined;
+			const handoff = details?.handoff;
+			const fallbackContent =
+				typeof message.content === "string"
+					? message.content
+					: message.content
+							.filter((part) => part.type === "text")
+							.map((part) => part.text)
+							.join("\n");
+			const box = new Box(1, 1, (inner) => theme.bg("customMessageBg", inner));
+			const container = new Container();
+			const title =
+				details?.action === "cleared"
+					? "Handoff cleared"
+					: details?.action === "saved"
+						? "Handoff saved"
+						: details?.action === "used"
+							? "Handoff used"
+							: "Handoff";
+			container.addChild(
+				new Text(theme.fg("toolTitle", theme.bold(title)), 0, 0),
+			);
+			container.addChild(
+				new Text(theme.fg("dim", fallbackContent || "(no details)"), 0, 0),
+			);
+
+			if (expanded && handoff) {
+				const mdTheme = getMarkdownTheme();
+				container.addChild(new Spacer(1));
+				container.addChild(new Text(theme.fg("muted", "Source:"), 0, 0));
+				container.addChild(
+					new Text(
+						theme.fg("accent", handoff.sourceAgent) +
+							theme.fg(
+								"dim",
+								` · saved ${formatSavedAge(handoff.savedAt)} ago`,
+							),
+						0,
+						0,
+					),
+				);
+				container.addChild(new Spacer(1));
+				container.addChild(new Text(theme.fg("muted", "Task:"), 0, 0));
+				container.addChild(new Text(theme.fg("dim", handoff.sourceTask), 0, 0));
+				container.addChild(new Spacer(1));
+				container.addChild(
+					new Text(theme.fg("muted", "Output preview:"), 0, 0),
+				);
+				const preview = getCollapsedOutputPreview(handoff.output);
+				container.addChild(new Markdown(preview.text, 0, 0, mdTheme));
+				if (preview.truncated) {
+					container.addChild(
+						new Text(theme.fg("muted", "(preview truncated)"), 0, 0),
+					);
+				}
+			}
+
+			box.addChild(container);
+			return box;
+		},
+	);
+
 	pi.registerMessageRenderer(
 		"subagent-list",
 		(message, { expanded }, theme) => {
@@ -969,180 +1237,441 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	const queueWarning =
+		"New prompts you send now will queue until this subagent finishes.";
+
+	const sendHandoffStatus = (
+		action: HandoffStatusDetails["action"],
+		handoff?: HandoffBuffer,
+		targetAgent?: string,
+	) => {
+		let content: string;
+		if (action === "cleared") {
+			content = "Cleared the saved handoff buffer.";
+		} else if (!handoff) {
+			content = "No saved handoff.";
+		} else if (action === "saved") {
+			content = `Saved handoff from ${handoff.sourceAgent}.`;
+		} else if (action === "used") {
+			content = `Using saved handoff from ${handoff.sourceAgent} for ${targetAgent ?? "the next step"}.`;
+		} else {
+			content = `Saved handoff from ${handoff.sourceAgent}, ${formatSavedAge(handoff.savedAt)} ago.`;
+		}
+		pi.sendMessage({
+			customType: "handoff-status",
+			content,
+			display: true,
+			details: {
+				action,
+				handoff,
+				targetAgent,
+			} satisfies HandoffStatusDetails,
+		});
+	};
+
+	const saveHandoffFromResult = (
+		result: SingleResult,
+		announce = true,
+	): void => {
+		if (didSubagentFail(result)) return;
+		const output = result.finalOutput.trim();
+		if (!output) return;
+		handoffBuffer = {
+			sourceAgent: result.agent,
+			sourceTask: result.task,
+			output,
+			savedAt: Date.now(),
+		};
+		if (announce) sendHandoffStatus("saved", handoffBuffer);
+	};
+
+	const getCurrentSessionModel = (ctx: ExtensionCommandContext) =>
+		ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+
+	const clearLiveSubagentUI = (ctx: ExtensionCommandContext) => {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		ctx.ui.setWidget(WIDGET_KEY, undefined);
+		ctx.ui.setWorkingMessage();
+	};
+
+	const sendSubagentResult = (result: SingleResult) => {
+		const summary = getResultSummaryPreview(result);
+		pi.sendMessage({
+			customType: "subagent-run",
+			content: summary,
+			display: true,
+			details: result,
+		});
+	};
+
+	const updateLiveSubagentUI = (
+		commandCtx: ExtensionCommandContext,
+		result: SingleResult,
+	) => {
+		const statusParts = [
+			commandCtx.ui.theme.fg("warning", "⏳"),
+			commandCtx.ui.theme.fg("accent", `subagent ${result.agent}`),
+			commandCtx.ui.theme.fg("dim", formatElapsed(result)),
+		];
+		if (result.activeToolCall) {
+			statusParts.push(
+				commandCtx.ui.theme.fg(
+					"dim",
+					formatToolCall(
+						result.activeToolCall.name,
+						result.activeToolCall.args,
+						commandCtx.ui.theme.fg.bind(commandCtx.ui.theme),
+					),
+				),
+			);
+		} else if (result.displayItems.length > 0) {
+			statusParts.push(commandCtx.ui.theme.fg("dim", formatResultMeta(result)));
+		} else {
+			statusParts.push(commandCtx.ui.theme.fg("dim", "starting..."));
+		}
+		commandCtx.ui.setStatus(STATUS_KEY, statusParts.filter(Boolean).join(" "));
+		commandCtx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
+			const box = new Box(1, 1, (inner) => theme.bg("customMessageBg", inner));
+			const container = new Container();
+			const pidText = result.pid ? ` pid:${result.pid}` : "";
+			const header = `${theme.fg("warning", "⏳")} ${theme.fg("toolTitle", theme.bold(`Subagent ${result.agent}`))}${theme.fg("muted", ` (${result.agentSource})`)} ${theme.fg("dim", `elapsed ${formatElapsed(result)}${pidText}`)}`;
+			container.addChild(new Text(header, 0, 0));
+			container.addChild(new Text(theme.fg("warning", queueWarning), 0, 0));
+			if (result.agentSource === "project") {
+				container.addChild(
+					new Text(
+						theme.fg("warning", "Using project-local agent from .pi/agents"),
+						0,
+						0,
+					),
+				);
+			}
+			container.addChild(new Spacer(1));
+			container.addChild(new Text(theme.fg("muted", "Task:"), 0, 0));
+			container.addChild(new Text(theme.fg("dim", result.task), 0, 0));
+
+			const activityLines: string[] = [];
+			if (result.activeToolCall) {
+				activityLines.push(
+					theme.fg("muted", "→ ") +
+						formatToolCall(
+							result.activeToolCall.name,
+							result.activeToolCall.args,
+							theme.fg.bind(theme),
+						) +
+						theme.fg(
+							"warning",
+							` (running ${formatDuration(Date.now() - result.activeToolCall.startedAt)})`,
+						),
+				);
+			}
+			for (const item of result.displayItems.slice(-LIVE_ACTIVITY_ITEM_COUNT)) {
+				if (item.type === "toolCall") {
+					activityLines.push(
+						theme.fg("muted", "→ ") +
+							formatToolCall(item.name, item.args, theme.fg.bind(theme)),
+					);
+					continue;
+				}
+				const preview = truncateText(stripMarkdownForPreview(item.text), 180);
+				if (preview) activityLines.push(theme.fg("toolOutput", preview));
+			}
+
+			container.addChild(new Spacer(1));
+			container.addChild(new Text(theme.fg("muted", "Recent activity:"), 0, 0));
+			if (activityLines.length === 0) {
+				container.addChild(
+					new Text(theme.fg("dim", "Waiting for first model event..."), 0, 0),
+				);
+			} else {
+				for (const line of activityLines) {
+					container.addChild(new Text(line, 0, 0));
+				}
+			}
+
+			const meta = formatResultMeta(result);
+			if (meta) {
+				container.addChild(new Spacer(1));
+				container.addChild(new Text(theme.fg("dim", meta), 0, 0));
+			}
+			if (result.stderr.trim()) {
+				container.addChild(new Text(theme.fg("muted", "stderr:"), 0, 0));
+				container.addChild(
+					new Text(
+						theme.fg(
+							"error",
+							truncateText(collapseWhitespace(result.stderr), 220),
+						),
+						0,
+						0,
+					),
+				);
+			}
+
+			box.addChild(container);
+			return box;
+		});
+	};
+
+	const runCommandSubagent = async (
+		commandCtx: ExtensionCommandContext,
+		agents: AgentConfig[],
+		agentName: string,
+		task: string,
+		currentSessionModel?: string,
+		workflowLabel?: string,
+	): Promise<SingleResult> => {
+		const label = workflowLabel
+			? `${workflowLabel}: ${agentName}`
+			: `Subagent ${agentName}`;
+		commandCtx.ui.setWorkingMessage(
+			`${label} running… queued prompts will wait for it to finish.`,
+		);
+		const result = await runSubagent(
+			commandCtx.cwd,
+			agents,
+			agentName,
+			task,
+			DEFAULT_TIMEOUT_MS,
+			currentSessionModel,
+			(partial) => updateLiveSubagentUI(commandCtx, partial),
+		);
+		sendSubagentResult(result);
+		return result;
+	};
+
+	pi.registerCommand("handoff", {
+		description: "Show or clear the saved handoff buffer: /handoff [clear]",
+		handler: async (args, ctx) => {
+			const command = args.trim();
+			if (!command) {
+				sendHandoffStatus("show", handoffBuffer);
+				return;
+			}
+			if (command === "clear") {
+				handoffBuffer = undefined;
+				sendHandoffStatus("cleared");
+				return;
+			}
+			ctx.ui.notify("Usage: /handoff [clear]", "warning");
+		},
+	});
+
 	pi.registerCommand("subagent", {
-		description: "Run one isolated subagent: /subagent <agent> <task>",
+		description:
+			"Run one isolated subagent: /subagent <agent> [--no-handoff] <task>",
 		getArgumentCompletions: makeAgentCompletions,
 		handler: async (args, ctx) => {
 			const parsed = parseCommandArgs(args);
 			if (!parsed) {
-				ctx.ui.notify("Usage: /subagent <agent> <task>", "warning");
+				ctx.ui.notify(
+					"Usage: /subagent <agent> [--no-handoff] <task>",
+					"warning",
+				);
 				return;
 			}
 
 			const agents = discoverAgents(ctx.cwd).agents;
-			const currentSessionModel = ctx.model
-				? `${ctx.model.provider}/${ctx.model.id}`
-				: undefined;
-			const queueWarning =
-				"New prompts you send now will queue until this subagent finishes.";
+			const currentSessionModel = getCurrentSessionModel(ctx);
+			const handoffTask =
+				!parsed.noHandoff && handoffBuffer
+					? buildTaskFromHandoff(parsed.agent, parsed.task, handoffBuffer)
+					: undefined;
+			const handoffForAgent = handoffTask ? handoffBuffer : undefined;
+			const task = handoffTask ?? parsed.task;
 
-			const updateLiveSubagentUI = (
-				commandCtx: ExtensionCommandContext,
-				result: SingleResult,
-			) => {
-				const statusParts = [
-					commandCtx.ui.theme.fg("warning", "⏳"),
-					commandCtx.ui.theme.fg("accent", `subagent ${result.agent}`),
-					commandCtx.ui.theme.fg("dim", formatElapsed(result)),
-				];
-				if (result.activeToolCall) {
-					statusParts.push(
-						commandCtx.ui.theme.fg(
-							"dim",
-							formatToolCall(
-								result.activeToolCall.name,
-								result.activeToolCall.args,
-								commandCtx.ui.theme.fg.bind(commandCtx.ui.theme),
-							),
-						),
-					);
-				} else if (result.displayItems.length > 0) {
-					statusParts.push(
-						commandCtx.ui.theme.fg("dim", formatResultMeta(result)),
-					);
-				} else {
-					statusParts.push(commandCtx.ui.theme.fg("dim", "starting..."));
-				}
-				commandCtx.ui.setStatus(
-					STATUS_KEY,
-					statusParts.filter(Boolean).join(" "),
-				);
-				commandCtx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
-					const box = new Box(1, 1, (inner) =>
-						theme.bg("customMessageBg", inner),
-					);
-					const container = new Container();
-					const pidText = result.pid ? ` pid:${result.pid}` : "";
-					const header = `${theme.fg("warning", "⏳")} ${theme.fg("toolTitle", theme.bold(`Subagent ${result.agent}`))}${theme.fg("muted", ` (${result.agentSource})`)} ${theme.fg("dim", `elapsed ${formatElapsed(result)}${pidText}`)}`;
-					container.addChild(new Text(header, 0, 0));
-					container.addChild(new Text(theme.fg("warning", queueWarning), 0, 0));
-					if (result.agentSource === "project") {
-						container.addChild(
-							new Text(
-								theme.fg(
-									"warning",
-									"Using project-local agent from .pi/agents",
-								),
-								0,
-								0,
-							),
-						);
-					}
-					container.addChild(new Spacer(1));
-					container.addChild(new Text(theme.fg("muted", "Task:"), 0, 0));
-					container.addChild(new Text(theme.fg("dim", result.task), 0, 0));
-
-					const activityLines: string[] = [];
-					if (result.activeToolCall) {
-						activityLines.push(
-							theme.fg("muted", "→ ") +
-								formatToolCall(
-									result.activeToolCall.name,
-									result.activeToolCall.args,
-									theme.fg.bind(theme),
-								) +
-								theme.fg(
-									"warning",
-									` (running ${formatDuration(Date.now() - result.activeToolCall.startedAt)})`,
-								),
-						);
-					}
-					for (const item of result.displayItems.slice(
-						-LIVE_ACTIVITY_ITEM_COUNT,
-					)) {
-						if (item.type === "toolCall") {
-							activityLines.push(
-								theme.fg("muted", "→ ") +
-									formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-							);
-							continue;
-						}
-						const preview = truncateText(
-							stripMarkdownForPreview(item.text),
-							180,
-						);
-						if (preview) {
-							activityLines.push(theme.fg("toolOutput", preview));
-						}
-					}
-
-					container.addChild(new Spacer(1));
-					container.addChild(
-						new Text(theme.fg("muted", "Recent activity:"), 0, 0),
-					);
-					if (activityLines.length === 0) {
-						container.addChild(
-							new Text(
-								theme.fg("dim", "Waiting for first model event..."),
-								0,
-								0,
-							),
-						);
-					} else {
-						for (const line of activityLines) {
-							container.addChild(new Text(line, 0, 0));
-						}
-					}
-
-					const meta = formatResultMeta(result);
-					if (meta) {
-						container.addChild(new Spacer(1));
-						container.addChild(new Text(theme.fg("dim", meta), 0, 0));
-					}
-					if (result.stderr.trim()) {
-						container.addChild(new Text(theme.fg("muted", "stderr:"), 0, 0));
-						container.addChild(
-							new Text(
-								theme.fg(
-									"error",
-									truncateText(collapseWhitespace(result.stderr), 220),
-								),
-								0,
-								0,
-							),
-						);
-					}
-
-					box.addChild(container);
-					return box;
-				});
-			};
-
-			ctx.ui.setWorkingMessage(
-				`Subagent ${parsed.agent} running… queued prompts will wait for it to finish.`,
-			);
+			if (handoffForAgent) {
+				sendHandoffStatus("used", handoffForAgent, parsed.agent);
+			}
 
 			try {
-				const result = await runSubagent(
-					ctx.cwd,
+				const result = await runCommandSubagent(
+					ctx,
 					agents,
 					parsed.agent,
-					parsed.task,
-					DEFAULT_TIMEOUT_MS,
+					task,
 					currentSessionModel,
-					(partial) => updateLiveSubagentUI(ctx, partial),
 				);
-				const summary = getResultSummaryPreview(result);
-				pi.sendMessage({
-					customType: "subagent-run",
-					content: summary,
-					display: true,
-					details: result,
-				});
+				saveHandoffFromResult(result);
 			} finally {
-				ctx.ui.setStatus(STATUS_KEY, undefined);
-				ctx.ui.setWidget(WIDGET_KEY, undefined);
-				ctx.ui.setWorkingMessage();
+				clearLiveSubagentUI(ctx);
+			}
+		},
+	});
+
+	pi.registerCommand("scout-and-plan", {
+		description:
+			"Run scout, then pass its findings to planner: /scout-and-plan <task>",
+		handler: async (args, ctx) => {
+			const task = parseTaskArgs(args);
+			if (!task) {
+				ctx.ui.notify("Usage: /scout-and-plan <task>", "warning");
+				return;
+			}
+
+			const agents = discoverAgents(ctx.cwd).agents;
+			const currentSessionModel = getCurrentSessionModel(ctx);
+
+			try {
+				const scoutResult = await runCommandSubagent(
+					ctx,
+					agents,
+					"scout",
+					task,
+					currentSessionModel,
+					"Workflow scout-and-plan",
+				);
+				saveHandoffFromResult(scoutResult, false);
+				if (didSubagentFail(scoutResult)) {
+					ctx.ui.notify(
+						"/scout-and-plan stopped because scout failed.",
+						"warning",
+					);
+					return;
+				}
+
+				const plannerResult = await runCommandSubagent(
+					ctx,
+					agents,
+					"planner",
+					buildPlannerTask(task, scoutResult.finalOutput),
+					currentSessionModel,
+					"Workflow scout-and-plan",
+				);
+				saveHandoffFromResult(plannerResult, false);
+			} finally {
+				clearLiveSubagentUI(ctx);
+			}
+		},
+	});
+
+	pi.registerCommand("implement", {
+		description:
+			"Run scout, planner, then worker with automatic handoff: /implement <task>",
+		handler: async (args, ctx) => {
+			const task = parseTaskArgs(args);
+			if (!task) {
+				ctx.ui.notify("Usage: /implement <task>", "warning");
+				return;
+			}
+
+			const agents = discoverAgents(ctx.cwd).agents;
+			const currentSessionModel = getCurrentSessionModel(ctx);
+
+			try {
+				const scoutResult = await runCommandSubagent(
+					ctx,
+					agents,
+					"scout",
+					task,
+					currentSessionModel,
+					"Workflow implement",
+				);
+				saveHandoffFromResult(scoutResult, false);
+				if (didSubagentFail(scoutResult)) {
+					ctx.ui.notify("/implement stopped because scout failed.", "warning");
+					return;
+				}
+
+				const plannerResult = await runCommandSubagent(
+					ctx,
+					agents,
+					"planner",
+					buildPlannerTask(task, scoutResult.finalOutput),
+					currentSessionModel,
+					"Workflow implement",
+				);
+				saveHandoffFromResult(plannerResult, false);
+				if (didSubagentFail(plannerResult)) {
+					ctx.ui.notify(
+						"/implement stopped because planner failed.",
+						"warning",
+					);
+					return;
+				}
+
+				const workerResult = await runCommandSubagent(
+					ctx,
+					agents,
+					"worker",
+					buildWorkerTask(
+						task,
+						scoutResult.finalOutput,
+						plannerResult.finalOutput,
+					),
+					currentSessionModel,
+					"Workflow implement",
+				);
+				saveHandoffFromResult(workerResult, false);
+			} finally {
+				clearLiveSubagentUI(ctx);
+			}
+		},
+	});
+
+	pi.registerCommand("implement-and-review", {
+		description:
+			"Run worker, reviewer, then worker with automatic handoff: /implement-and-review <task>",
+		handler: async (args, ctx) => {
+			const task = parseTaskArgs(args);
+			if (!task) {
+				ctx.ui.notify("Usage: /implement-and-review <task>", "warning");
+				return;
+			}
+
+			const agents = discoverAgents(ctx.cwd).agents;
+			const currentSessionModel = getCurrentSessionModel(ctx);
+
+			try {
+				const workerResult = await runCommandSubagent(
+					ctx,
+					agents,
+					"worker",
+					task,
+					currentSessionModel,
+					"Workflow implement-and-review",
+				);
+				saveHandoffFromResult(workerResult, false);
+				if (didSubagentFail(workerResult)) {
+					ctx.ui.notify(
+						"/implement-and-review stopped because worker failed.",
+						"warning",
+					);
+					return;
+				}
+
+				const reviewerResult = await runCommandSubagent(
+					ctx,
+					agents,
+					"reviewer",
+					buildReviewerTask(task, workerResult.finalOutput),
+					currentSessionModel,
+					"Workflow implement-and-review",
+				);
+				saveHandoffFromResult(reviewerResult, false);
+				if (didSubagentFail(reviewerResult)) {
+					ctx.ui.notify(
+						"/implement-and-review stopped because reviewer failed.",
+						"warning",
+					);
+					return;
+				}
+
+				const revisedWorkerResult = await runCommandSubagent(
+					ctx,
+					agents,
+					"worker",
+					buildRevisionTask(
+						task,
+						workerResult.finalOutput,
+						reviewerResult.finalOutput,
+					),
+					currentSessionModel,
+					"Workflow implement-and-review",
+				);
+				saveHandoffFromResult(revisedWorkerResult, false);
+			} finally {
+				clearLiveSubagentUI(ctx);
 			}
 		},
 	});

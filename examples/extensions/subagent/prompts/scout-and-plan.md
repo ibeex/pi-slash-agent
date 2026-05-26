@@ -1,9 +1,18 @@
 ---
-description: Scout gathers context, planner creates implementation plan (no implementation)
+description: Reference for the built-in /scout-and-plan workflow
 ---
-Use the subagent tool with the chain parameter to execute this workflow:
+This workflow is now implemented directly by the extension as a slash command.
 
-1. First, use the "scout" agent to find all code relevant to: $@
-2. Then, use the "planner" agent to create an implementation plan for "$@" using the context from the previous step (use {previous} placeholder)
+Preferred usage:
 
-Execute this as a chain, passing output between steps via {previous}. Do NOT implement - just return the plan.
+```text
+/scout-and-plan $@
+```
+
+Behavior:
+1. Run `scout` on the request: $@
+2. Capture the scout's final output as an explicit handoff
+3. Run `planner` with:
+   - the original request
+   - the scout handoff
+4. Return the plan only; do not implement

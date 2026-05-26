@@ -23,9 +23,6 @@
 	"pi": {
 		"extensions": [
 			"./src/index.ts"
-		],
-		"prompts": [
-			"./examples/extensions/subagent/prompts"
 		]
 	},
 	"scripts": {

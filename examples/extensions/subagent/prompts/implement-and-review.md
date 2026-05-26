@@ -1,10 +1,19 @@
 ---
-description: Worker implements, reviewer reviews, worker applies feedback
+description: Reference for the built-in /implement-and-review workflow
 ---
-Use the subagent tool with the chain parameter to execute this workflow:
+This workflow is now implemented directly by the extension as a slash command.
 
-1. First, use the "worker" agent to implement: $@
-2. Then, use the "reviewer" agent to review the implementation from the previous step (use {previous} placeholder)
-3. Finally, use the "worker" agent to apply the feedback from the review (use {previous} placeholder)
+Preferred usage:
 
-Execute this as a chain, passing output between steps via {previous}.
+```text
+/implement-and-review $@
+```
+
+Behavior:
+1. Run `worker` to implement: $@
+2. Capture the worker's final output as an explicit handoff
+3. Run `reviewer` with the original request plus the worker handoff
+4. Run `worker` again with:
+   - the original request
+   - the previous worker summary
+   - the reviewer feedback

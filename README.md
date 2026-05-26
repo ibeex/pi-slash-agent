@@ -1,12 +1,13 @@
 # pi-slash-agent
 
-`pi-slash-agent` is a Pi extension that adds explicit slash commands for isolated subagents and ships workflow prompt templates:
+`pi-slash-agent` is a Pi extension that adds explicit slash commands for isolated subagents and workflow handoffs:
 
 - `/subagent <agent> <task>`
 - `/subagents`
-- `/implement`
-- `/scout-and-plan`
-- `/implement-and-review`
+- `/scout-and-plan <task>`
+- `/implement <task>`
+- `/implement-and-review <task>`
+- `/handoff [clear]`
 
 Unlike tool-based subagent packages, this package does **not** register an LLM tool. That means:
 
@@ -14,6 +15,29 @@ Unlike tool-based subagent packages, this package does **not** register an LLM t
 - nothing is added to the default system prompt,
 - the main agent cannot call subagents on its own,
 - subagents run only when you explicitly invoke the slash command.
+
+## Mental model
+
+If you are used to tool-based subagents, the main difference is:
+
+### Tool-based style
+
+```text
+main agent
+  └─ calls subagent tool
+      └─ child agent runs
+```
+
+### `pi-slash-agent` style
+
+```text
+you run /subagent or a workflow slash command
+  └─ extension starts isolated pi subprocess
+      └─ child agent runs
+          └─ final output can be saved as handoff
+```
+
+So instead of the main model deciding when to call a subagent, **you** decide explicitly with slash commands.
 
 ## Install
 
@@ -28,6 +52,71 @@ Or install as a Pi package:
 ```bash
 pi install /path/to/pi-slash-agent
 ```
+
+## How handoffs work
+
+A successful subagent run can save its final output into one session-local handoff buffer.
+A later compatible subagent can consume that buffer automatically.
+
+```text
+/subagent scout Find auth files
+        │
+        └─ saves handoff = scout output
+
+/subagent planner Create a plan
+        │
+        └─ consumes scout handoff
+           saves handoff = planner output
+
+/subagent worker Implement it
+        │
+        └─ consumes planner handoff
+           saves handoff = worker output
+```
+
+Think of the saved handoff as a single "latest useful result" buffer.
+Each successful subagent run replaces the previous saved handoff.
+
+You can inspect or clear it with:
+
+```text
+/handoff
+/handoff clear
+```
+
+## Quick start
+
+### One-off subagent
+
+```text
+/subagent scout Find auth-related files
+```
+
+### Manual step-by-step workflow
+
+```text
+/subagent scout Find auth-related files
+/subagent planner Create an implementation plan for OAuth support
+/subagent worker Implement the plan
+```
+
+In that sequence:
+- `planner` consumes the saved `scout` output
+- `worker` consumes the saved `planner` output
+
+### One-command workflow
+
+```text
+/implement Add OAuth support to auth flow
+```
+
+That runs:
+
+```text
+scout → planner → worker
+```
+
+for you automatically.
 
 ## Commands
 
@@ -53,27 +142,64 @@ Also loads custom agents from:
 
 When names collide, project-local agents override user agents, and user agents override built-ins. Project-local agents are explicit slash-command only; this extension still does not expose an LLM-callable subagent tool.
 
-### `/subagent <agent> <task>`
+### `/subagent <agent> [--no-handoff] <task>`
 
 Runs one isolated Pi subprocess for the requested agent.
+
+Successful subagent runs save their final output into a session-local handoff buffer.
+When a later built-in subagent supports consuming that saved handoff, the extension automatically injects it unless you pass `--no-handoff`.
+
+This gives you a slash-command version of multi-step delegation without reintroducing a hidden LLM tool.
 
 Examples:
 
 ```text
 /subagent scout Find auth-related files. Do not edit files.
+/subagent planner Create an implementation plan for OAuth support.
+/subagent worker Implement the requested change using the saved plan.
 /subagent reviewer Review the recent changes for correctness and risk.
-/subagent worker Implement the fix in src/auth.ts and summarize changed files.
+/subagent worker Apply the saved review feedback.
+/subagent planner --no-handoff Create a plan from scratch.
 ```
 
-### Prompt templates
+### `/handoff [clear]`
 
-This package also includes prompt templates in `examples/extensions/subagent/prompts/`.
-They expand into `subagent` chains and become available as slash commands after you install or enable the package and run `/reload`.
-See `examples/extensions/subagent/README.md` for a focused example overview.
+Shows the current saved handoff buffer, including which agent produced it and a preview of the saved output.
 
-- `/implement` - scout → planner → worker
-- `/scout-and-plan` - scout → planner
-- `/implement-and-review` - worker → reviewer → worker
+Built-in auto-consume rules currently are:
+
+| Consumer | Accepts saved handoff from |
+|---|---|
+| `planner` | `scout` |
+| `worker` | `scout`, `planner`, `reviewer` |
+| `reviewer` | `worker` |
+
+Aliases `general` and `general-purpose` behave like `worker`.
+
+Use `/handoff clear` to clear it.
+
+### Workflow commands
+
+The package includes built-in workflow slash commands implemented in the extension itself:
+
+- `/scout-and-plan <task>` - scout → planner with automatic handoff
+- `/implement <task>` - scout → planner → worker with automatic handoff
+- `/implement-and-review <task>` - worker → reviewer → worker with automatic handoff
+
+Diagram:
+
+```text
+/scout-and-plan
+  scout ──handoff──▶ planner
+
+/implement
+  scout ──handoff──▶ planner ──handoff──▶ worker
+
+/implement-and-review
+  worker ──handoff──▶ reviewer ──handoff──▶ worker
+```
+
+Each step still runs in its own isolated Pi subprocess. The extension captures one step's final output and injects it into the next step's task, so no manual copy/paste is needed.
 
 ## Agent format
 
@@ -90,6 +216,18 @@ You are an API review subagent. Do not edit files. Check compatibility,
 test coverage, and migration risks. Report PASS/FAIL/PARTIAL with evidence.
 ```
 
+## Why this exists
+
+This package is meant for users who want the benefits of subagents without tool-based orchestration:
+
+- explicit control over when subagents run
+- isolated subprocesses with narrow prompts
+- reproducible handoffs between steps
+- no extra LLM tool exposed to the main agent
+
+If you prefer the model to decide on its own when to delegate, a tool-based subagent package is a better fit.
+If you prefer explicit slash-command control, this package is designed for that workflow.
+
 ## Runtime behavior
 
 - Default timeout: `PI_SLASH_AGENT_TIMEOUT_MS` or 10 minutes.
@@ -99,6 +237,9 @@ test coverage, and migration risks. Report PASS/FAIL/PARTIAL with evidence.
 - While a subagent is running in interactive mode, the extension shows a live widget near the editor with elapsed time, pid, project-agent notice, recent activity/tool calls, stderr preview, and a warning that newly submitted prompts will queue until the subagent finishes.
 - Subprocess handling includes JSON-line buffering, spawn-error capture, stderr capping, timeout termination with process-group SIGTERM/SIGKILL on Unix, and temporary prompt directory cleanup.
 - Streams no LLM tool metadata into the main agent because this package exposes only slash commands.
+- Workflow handoffs are performed by the extension code, not by an LLM-callable tool.
+- The saved handoff buffer is session-local and lives only inside the running extension process.
+- Successful subagent runs update the single saved handoff buffer; later compatible built-in agents can consume it automatically.
 
 ## Package layout
 
