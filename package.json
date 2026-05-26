@@ -16,12 +16,16 @@
 	],
 	"files": [
 		"src",
+		"examples",
 		"README.md",
 		"LICENSE"
 	],
 	"pi": {
 		"extensions": [
 			"./src/index.ts"
+		],
+		"prompts": [
+			"./examples/extensions/subagent/prompts"
 		]
 	},
 	"scripts": {

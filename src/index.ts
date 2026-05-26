@@ -470,6 +470,7 @@ async function runSubagent(
 	agentName: string,
 	task: string,
 	timeoutMs: number,
+	currentSessionModel?: string,
 	onUpdate?: (result: SingleResult) => void,
 ): Promise<SingleResult> {
 	const agent = agents.find((entry) => entry.name === agentName);
@@ -487,7 +488,7 @@ async function runSubagent(
 	}
 
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	if (agent.model) args.push("--model", agent.model);
+	if (currentSessionModel) args.push("--model", currentSessionModel);
 	if (agent.tools && agent.tools.length > 0)
 		args.push("--tools", agent.tools.join(","));
 
@@ -500,7 +501,7 @@ async function runSubagent(
 		task,
 		timeoutMs,
 	);
-	result.model = agent.model;
+	result.model = currentSessionModel;
 	const emitUpdate = () => {
 		result.lastEventAt = Date.now();
 		onUpdate?.({ ...result, displayItems: [...result.displayItems] });
@@ -800,9 +801,6 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 					text += `\n${theme.fg("accent", agent.name)} ${theme.fg("dim", agent.description)}`;
 					if (expanded) {
 						text += `\n  ${theme.fg("muted", shortenPath(agent.filePath))}`;
-						if (agent.model) {
-							text += `\n  ${theme.fg("muted", `model: ${agent.model}`)}`;
-						}
 						if (agent.tools && agent.tools.length > 0) {
 							text += `\n  ${theme.fg("muted", `tools: ${agent.tools.join(", ")}`)}`;
 						}
@@ -982,6 +980,9 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 			}
 
 			const agents = discoverAgents(ctx.cwd).agents;
+			const currentSessionModel = ctx.model
+				? `${ctx.model.provider}/${ctx.model.id}`
+				: undefined;
 			const queueWarning =
 				"New prompts you send now will queue until this subagent finishes.";
 
@@ -1128,6 +1129,7 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 					parsed.agent,
 					parsed.task,
 					DEFAULT_TIMEOUT_MS,
+					currentSessionModel,
 					(partial) => updateLiveSubagentUI(ctx, partial),
 				);
 				const summary = getResultSummaryPreview(result);
