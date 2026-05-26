@@ -142,6 +142,8 @@ Also loads custom agents from:
 
 When names collide, project-local agents override user agents, and user agents override built-ins. Project-local agents are explicit slash-command only; this extension still does not expose an LLM-callable subagent tool.
 
+Handoff auto-consume behavior is special-cased only for the built-in workflow agents (`planner`, `worker`, `reviewer`) plus the built-in aliases `general` and `general-purpose`. If you override `general` or `general-purpose` with your own custom agent, it behaves like your custom agent rather than inheriting built-in `worker` handoff semantics.
+
 ### `/subagent <agent> [--no-handoff] <task>`
 
 Runs one isolated Pi subprocess for the requested agent.
@@ -174,7 +176,7 @@ Built-in auto-consume rules currently are:
 | `worker` | `scout`, `planner`, `reviewer` |
 | `reviewer` | `worker` |
 
-Aliases `general` and `general-purpose` behave like `worker`.
+Built-in aliases `general` and `general-purpose` behave like `worker`.
 
 Use `/handoff clear` to clear it.
 
@@ -243,6 +245,10 @@ If you prefer explicit slash-command control, this package is designed for that 
 
 ## Package layout
 
+Legacy reference examples:
+- `examples/extensions/subagent/prompts/*` are reference-only and are not auto-loaded by this package.
+
+
 ```text
 pi-slash-agent/
 ├── src/
@@ -258,7 +264,7 @@ pi-slash-agent/
 ├── examples/
 │   └── extensions/
 │       └── subagent/
-│           └── prompts/
+│           └── prompts/            # legacy reference examples; not auto-loaded
 │               ├── implement.md
 │               ├── scout-and-plan.md
 │               └── implement-and-review.md

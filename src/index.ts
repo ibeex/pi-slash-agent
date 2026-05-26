@@ -89,6 +89,7 @@ interface SubagentListDetails {
 
 interface HandoffBuffer {
 	sourceAgent: string;
+	sourceAgentSource: AgentSource | "unknown";
 	sourceTask: string;
 	output: string;
 	savedAt: number;
@@ -409,16 +410,18 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
 	return items;
 }
 
-async function writePromptToTempFile(
-	agentName: string,
-	prompt: string,
+async function writeTextToTempFile(
+	label: string,
+	baseName: string,
+	content: string,
 ): Promise<{ dir: string; filePath: string }> {
 	const tmpDir = await fs.promises.mkdtemp(
 		path.join(os.tmpdir(), "pi-slash-agent-"),
 	);
-	const safeName = agentName.replace(/[^\w.-]+/g, "_");
-	const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
-	await fs.promises.writeFile(filePath, prompt, {
+	const safeName = baseName.replace(/[^\w.-]+/g, "_");
+	const safeLabel = label.replace(/[^\w.-]+/g, "_");
+	const filePath = path.join(tmpDir, `${safeLabel}-${safeName}.md`);
+	await fs.promises.writeFile(filePath, content, {
 		encoding: "utf-8",
 		mode: 0o600,
 	});
@@ -521,6 +524,8 @@ async function runSubagent(
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
+	let tmpTaskDir: string | null = null;
+	let tmpTaskPath: string | null = null;
 	const messages: Message[] = [];
 	const result: SingleResult = createEmptyResult(
 		agent.name,
@@ -536,13 +541,24 @@ async function runSubagent(
 
 	try {
 		if (agent.systemPrompt.trim()) {
-			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
+			const tmp = await writeTextToTempFile(
+				"prompt",
+				agent.name,
+				agent.systemPrompt,
+			);
 			tmpPromptDir = tmp.dir;
 			tmpPromptPath = tmp.filePath;
 			args.push("--append-system-prompt", tmpPromptPath);
 		}
 
-		args.push(`Task: ${task}`);
+		const taskFile = await writeTextToTempFile(
+			"task",
+			agent.name,
+			`Task: ${task}`,
+		);
+		tmpTaskDir = taskFile.dir;
+		tmpTaskPath = taskFile.filePath;
+		args.push(`@${tmpTaskPath}`);
 		emitUpdate();
 
 		result.exitCode = await new Promise<number>((resolve) => {
@@ -732,9 +748,10 @@ async function runSubagent(
 		if (!result.completedAt) result.completedAt = Date.now();
 		return result;
 	} finally {
-		if (tmpPromptDir) {
+		for (const tmpDir of [tmpPromptDir, tmpTaskDir]) {
+			if (!tmpDir) continue;
 			try {
-				await fs.promises.rm(tmpPromptDir, { recursive: true, force: true });
+				await fs.promises.rm(tmpDir, { recursive: true, force: true });
 			} catch {
 				// ignore
 			}
@@ -792,14 +809,18 @@ function formatHandoffOutput(label: string, output: string): string {
 	return trimmed || `(${label} returned no final output)`;
 }
 
-function canonicalAgentName(agentName: string): string {
-	switch (agentName) {
-		case "general":
-		case "general-purpose":
-			return "worker";
-		default:
-			return agentName;
+function getBuiltInAliasBehaviorName(
+	agentName: string,
+	agentSource: AgentSource | "unknown",
+): string {
+	if (agentSource === "built-in") {
+		switch (agentName) {
+			case "general":
+			case "general-purpose":
+				return "worker";
+		}
 	}
+	return agentName;
 }
 
 function buildPlannerTask(originalTask: string, scoutOutput: string): string {
@@ -906,13 +927,19 @@ function buildRevisionTask(
 }
 
 function buildTaskFromHandoff(
-	targetAgentName: string,
+	targetAgent: AgentConfig | undefined,
 	originalTask: string,
 	handoff: HandoffBuffer,
 ): string | undefined {
-	const target = canonicalAgentName(targetAgentName);
-	const source = canonicalAgentName(handoff.sourceAgent);
-	if (!handoff.output.trim()) return undefined;
+	if (!targetAgent || !handoff.output.trim()) return undefined;
+	const target = getBuiltInAliasBehaviorName(
+		targetAgent.name,
+		targetAgent.source,
+	);
+	const source = getBuiltInAliasBehaviorName(
+		handoff.sourceAgent,
+		handoff.sourceAgentSource,
+	);
 
 	switch (target) {
 		case "planner":
@@ -956,11 +983,14 @@ function getAgentAutocompleteScore(agent: AgentConfig, query: string): number {
 	return -1;
 }
 
-function makeAgentCompletions(prefix: string): AutocompleteItem[] | null {
+function makeAgentCompletions(
+	prefix: string,
+	cwd: string,
+): AutocompleteItem[] | null {
 	const raw = prefix.trimStart();
 	if (/\s/.test(raw)) return null;
 
-	const items = discoverAgents()
+	const items = discoverAgents(cwd)
 		.agents.map((agent) => ({
 			agent,
 			score: getAgentAutocompleteScore(agent, raw),
@@ -988,6 +1018,19 @@ function makeAgentCompletions(prefix: string): AutocompleteItem[] | null {
 
 export default function slashSubagentExtension(pi: ExtensionAPI) {
 	let handoffBuffer: HandoffBuffer | undefined;
+	let currentCwd = process.cwd();
+
+	const rememberCwd = (cwd: string) => {
+		currentCwd = cwd;
+	};
+
+	pi.on("session_start", (_event, ctx) => {
+		rememberCwd(ctx.cwd);
+	});
+
+	pi.on("before_agent_start", (_event, ctx) => {
+		rememberCwd(ctx.cwd);
+	});
 
 	pi.registerMessageRenderer(
 		"handoff-status",
@@ -1288,6 +1331,7 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		if (!output) return;
 		handoffBuffer = {
 			sourceAgent: result.agent,
+			sourceAgentSource: result.agentSource,
 			sourceTask: result.task,
 			output,
 			savedAt: Date.now(),
@@ -1304,11 +1348,34 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		ctx.ui.setWorkingMessage();
 	};
 
+	const buildSubagentContextContent = (result: SingleResult): string => {
+		const state = getResultState(result);
+		const parts = [
+			`Subagent: ${result.agent} (${result.agentSource})`,
+			`Status: ${state.label}`,
+			`Task: ${result.task}`,
+		];
+
+		if (result.finalOutput.trim()) {
+			parts.push("", "Output:", result.finalOutput.trim());
+		} else {
+			parts.push("", "Summary:", getResultSummaryPreview(result));
+		}
+
+		if (result.errorMessage) {
+			parts.push("", `Error: ${result.errorMessage}`);
+		}
+		if (result.stderr.trim()) {
+			parts.push("", "stderr:", result.stderr.trim());
+		}
+
+		return parts.join("\n");
+	};
+
 	const sendSubagentResult = (result: SingleResult) => {
-		const summary = getResultSummaryPreview(result);
 		pi.sendMessage({
 			customType: "subagent-run",
-			content: summary,
+			content: buildSubagentContextContent(result),
 			display: true,
 			details: result,
 		});
@@ -1470,8 +1537,10 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 	pi.registerCommand("subagent", {
 		description:
 			"Run one isolated subagent: /subagent <agent> [--no-handoff] <task>",
-		getArgumentCompletions: makeAgentCompletions,
+		getArgumentCompletions: (prefix) =>
+			makeAgentCompletions(prefix, currentCwd),
 		handler: async (args, ctx) => {
+			rememberCwd(ctx.cwd);
 			const parsed = parseCommandArgs(args);
 			if (!parsed) {
 				ctx.ui.notify(
@@ -1483,9 +1552,10 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 
 			const agents = discoverAgents(ctx.cwd).agents;
 			const currentSessionModel = getCurrentSessionModel(ctx);
+			const selectedAgent = agents.find((agent) => agent.name === parsed.agent);
 			const handoffTask =
 				!parsed.noHandoff && handoffBuffer
-					? buildTaskFromHandoff(parsed.agent, parsed.task, handoffBuffer)
+					? buildTaskFromHandoff(selectedAgent, parsed.task, handoffBuffer)
 					: undefined;
 			const handoffForAgent = handoffTask ? handoffBuffer : undefined;
 			const task = handoffTask ?? parsed.task;
@@ -1513,6 +1583,7 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		description:
 			"Run scout, then pass its findings to planner: /scout-and-plan <task>",
 		handler: async (args, ctx) => {
+			rememberCwd(ctx.cwd);
 			const task = parseTaskArgs(args);
 			if (!task) {
 				ctx.ui.notify("Usage: /scout-and-plan <task>", "warning");
@@ -1559,6 +1630,7 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		description:
 			"Run scout, planner, then worker with automatic handoff: /implement <task>",
 		handler: async (args, ctx) => {
+			rememberCwd(ctx.cwd);
 			const task = parseTaskArgs(args);
 			if (!task) {
 				ctx.ui.notify("Usage: /implement <task>", "warning");
@@ -1623,6 +1695,7 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		description:
 			"Run worker, reviewer, then worker with automatic handoff: /implement-and-review <task>",
 		handler: async (args, ctx) => {
+			rememberCwd(ctx.cwd);
 			const task = parseTaskArgs(args);
 			if (!task) {
 				ctx.ui.notify("Usage: /implement-and-review <task>", "warning");
