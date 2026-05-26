@@ -1,0 +1,53 @@
+{
+	"name": "@ibrkanac/pi-slash-agent",
+	"version": "0.1.0",
+	"description": "Pi extension that exposes explicit /subagent and /subagents slash commands without registering an LLM tool.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"subagent",
+		"slash-command",
+		"agents",
+		"automation"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/index.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-agent-core": "*",
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.14",
+		"@earendil-works/pi-agent-core": "0.74.0",
+		"@earendil-works/pi-ai": "0.74.0",
+		"@earendil-works/pi-coding-agent": "0.74.0",
+		"@earendil-works/pi-tui": "0.74.0",
+		"@modelcontextprotocol/sdk": "^1.18.2",
+		"@types/node": "^24.10.1",
+		"typescript": "6.0.3",
+		"undici-types": "^7.16.0"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/ibrkanac/pi-slash-agent"
+	}
+}
