@@ -1,7 +1,7 @@
 {
 	"name": "pi-slash-agent",
 	"version": "0.1.0",
-	"description": "Pi extension that exposes explicit /subagent and /subagents slash commands without registering an LLM tool.",
+	"description": "Pi extension that exposes explicit /subagent-run and /subagent-list slash commands without registering an LLM tool.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,

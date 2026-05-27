@@ -2,19 +2,19 @@
 
 This folder contains legacy prompt-template examples for `pi-slash-agent`.
 
-The package now implements workflow slash commands like `/scout-and-plan` and `/implement` directly in the extension, so these files are no longer auto-registered by `package.json`.
+The package now implements workflow slash commands like `/subagent-plan` and `/subagent-implement` directly in the extension, so these files are no longer auto-registered by `package.json`.
 
 ## Included templates
 
-- `implement.md` → `/implement`
-- `scout-and-plan.md` → `/scout-and-plan`
-- `implement-and-review.md` → `/implement-and-review`
+- `subagent-implement.md` → `/subagent-implement`
+- `subagent-plan.md` → `/subagent-plan`
+- `subagent-review-loop.md` → `/subagent-review-loop`
 
 ## What they do
 
-- `/implement <task>`: scout → planner → worker
-- `/scout-and-plan <task>`: scout → planner
-- `/implement-and-review <task>`: worker → reviewer → worker
+- `/subagent-implement <task>`: scout → planner → worker
+- `/subagent-plan <task>`: scout → planner
+- `/subagent-review-loop <task>`: worker → reviewer → worker
 
 ## Availability
 

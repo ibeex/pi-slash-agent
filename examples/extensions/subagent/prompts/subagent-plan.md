@@ -1,19 +1,18 @@
 ---
-description: Reference for the built-in /implement workflow
+description: Reference for the built-in /subagent-plan workflow
 ---
 This workflow is now implemented directly by the extension as a slash command.
 
 Preferred usage:
 
 ```text
-/implement $@
+/subagent-plan $@
 ```
 
 Behavior:
 1. Run `scout` on the request: $@
 2. Capture the scout's final output as an explicit handoff
-3. Run `planner` with the original request plus scout context
-4. Run `worker` with:
+3. Run `planner` with:
    - the original request
    - the scout handoff
-   - the planner handoff
+4. Return the plan only; do not implement

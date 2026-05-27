@@ -1,12 +1,12 @@
 ---
-description: Reference for the built-in /implement-and-review workflow
+description: Reference for the built-in /subagent-review-loop workflow
 ---
 This workflow is now implemented directly by the extension as a slash command.
 
 Preferred usage:
 
 ```text
-/implement-and-review $@
+/subagent-review-loop $@
 ```
 
 Behavior:

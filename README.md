@@ -2,12 +2,12 @@
 
 `pi-slash-agent` is a Pi extension that adds explicit slash commands for isolated subagents and workflow handoffs:
 
-- `/subagent <agent> [--no-handoff] <task>`
-- `/subagents`
-- `/scout-and-plan <task>`
-- `/implement <task>`
-- `/implement-and-review <task>`
-- `/handoff [clear]`
+- `/subagent-run <agent> [--no-handoff] <task>`
+- `/subagent-list`
+- `/subagent-plan <task>`
+- `/subagent-implement <task>`
+- `/subagent-review-loop <task>`
+- `/subagent-buffer [clear]`
 
 Unlike tool-based subagent packages, this package does **not** register an LLM tool. That means:
 
@@ -31,7 +31,7 @@ main agent
 ### `pi-slash-agent` style
 
 ```text
-you run /subagent or a workflow slash command
+you run /subagent-run or a workflow slash command
   └─ extension starts isolated pi subprocess
       └─ child agent runs
           └─ final output can be saved as handoff
@@ -59,16 +59,16 @@ A successful subagent run can save its final output into one session-local hando
 A later compatible subagent can consume that buffer automatically.
 
 ```text
-/subagent scout Find auth files
+/subagent-run scout Find auth files
         │
         └─ saves handoff = scout output
 
-/subagent planner Create a plan
+/subagent-run planner Create a plan
         │
         └─ consumes scout handoff
            saves handoff = planner output
 
-/subagent worker Implement it
+/subagent-run worker Implement it
         │
         └─ consumes planner handoff
            saves handoff = worker output
@@ -80,8 +80,8 @@ Each successful subagent run replaces the previous saved handoff.
 You can inspect or clear it with:
 
 ```text
-/handoff
-/handoff clear
+/subagent-buffer
+/subagent-buffer clear
 ```
 
 ## Quick start
@@ -89,15 +89,15 @@ You can inspect or clear it with:
 ### One-off subagent
 
 ```text
-/subagent scout Find auth-related files
+/subagent-run scout Find auth-related files
 ```
 
 ### Manual step-by-step workflow
 
 ```text
-/subagent scout Find auth-related files
-/subagent planner Create an implementation plan for OAuth support
-/subagent worker Implement the plan
+/subagent-run scout Find auth-related files
+/subagent-run planner Create an implementation plan for OAuth support
+/subagent-run worker Implement the plan
 ```
 
 In that sequence:
@@ -107,7 +107,7 @@ In that sequence:
 ### One-command workflow
 
 ```text
-/implement Add OAuth support to auth flow
+/subagent-implement Add OAuth support to auth flow
 ```
 
 That runs:
@@ -120,7 +120,7 @@ for you automatically.
 
 ## Commands
 
-### `/subagents`
+### `/subagent-list`
 
 Lists available agents.
 
@@ -131,7 +131,6 @@ Built-in agents are loaded from this package's markdown definitions in `src/agen
 - `reviewer` - code quality and security review
 - `worker` - general implementation
 - `general` - alias for `worker`
-- `general-purpose` - alias for `worker`
 
 Also loads custom agents from:
 
@@ -142,9 +141,9 @@ Also loads custom agents from:
 
 When names collide, project-local agents override user agents, and user agents override built-ins. Project-local agents are explicit slash-command only; this extension still does not expose an LLM-callable subagent tool.
 
-Handoff auto-consume behavior is special-cased only for the built-in workflow agents (`planner`, `worker`, `reviewer`) plus the built-in aliases `general` and `general-purpose`. If you override `general` or `general-purpose` with your own custom agent, it behaves like your custom agent rather than inheriting built-in `worker` handoff semantics.
+Handoff auto-consume behavior is special-cased only for the built-in workflow agents (`planner`, `worker`, `reviewer`) plus the built-in alias `general`. If you override `general` with your own custom agent, it behaves like your custom agent rather than inheriting built-in `worker` handoff semantics.
 
-### `/subagent <agent> [--no-handoff] <task>`
+### `/subagent-run <agent> [--no-handoff] <task>`
 
 Runs one isolated Pi subprocess for the requested agent.
 
@@ -156,15 +155,15 @@ This gives you a slash-command version of multi-step delegation without reintrod
 Examples:
 
 ```text
-/subagent scout Find auth-related files. Do not edit files.
-/subagent planner Create an implementation plan for OAuth support.
-/subagent worker Implement the requested change using the saved plan.
-/subagent reviewer Review the recent changes for correctness and risk.
-/subagent worker Apply the saved review feedback.
-/subagent planner --no-handoff Create a plan from scratch.
+/subagent-run scout Find auth-related files. Do not edit files.
+/subagent-run planner Create an implementation plan for OAuth support.
+/subagent-run worker Implement the requested change using the saved plan.
+/subagent-run reviewer Review the recent changes for correctness and risk.
+/subagent-run worker Apply the saved review feedback.
+/subagent-run planner --no-handoff Create a plan from scratch.
 ```
 
-### `/handoff [clear]`
+### `/subagent-buffer [clear]`
 
 Shows the current saved handoff buffer, including which agent produced it and a preview of the saved output.
 
@@ -176,28 +175,28 @@ Built-in auto-consume rules currently are:
 | `worker` | `scout`, `planner`, `reviewer` |
 | `reviewer` | `worker` |
 
-Built-in aliases `general` and `general-purpose` behave like `worker`.
+Built-in alias `general` behaves like `worker`.
 
-Use `/handoff clear` to clear it.
+Use `/subagent-buffer clear` to clear it.
 
 ### Workflow commands
 
 The package includes built-in workflow slash commands implemented in the extension itself:
 
-- `/scout-and-plan <task>` - scout → planner with automatic handoff
-- `/implement <task>` - scout → planner → worker with automatic handoff
-- `/implement-and-review <task>` - worker → reviewer → worker with automatic handoff
+- `/subagent-plan <task>` - scout → planner with automatic handoff
+- `/subagent-implement <task>` - scout → planner → worker with automatic handoff
+- `/subagent-review-loop <task>` - worker → reviewer → worker with automatic handoff
 
 Diagram:
 
 ```text
-/scout-and-plan
+/subagent-plan
   scout ──handoff──▶ planner
 
-/implement
+/subagent-implement
   scout ──handoff──▶ planner ──handoff──▶ worker
 
-/implement-and-review
+/subagent-review-loop
   worker ──handoff──▶ reviewer ──handoff──▶ worker
 ```
 
@@ -258,16 +257,15 @@ pi-slash-agent/
 │   │   ├── planner.md
 │   │   ├── reviewer.md
 │   │   ├── worker.md
-│   │   ├── general.md
-│   │   └── general-purpose.md
+│   │   └── general.md
 │   └── index.ts
 ├── examples/
 │   └── extensions/
 │       └── subagent/
 │           └── prompts/            # legacy reference examples; not auto-loaded
-│               ├── implement.md
-│               ├── scout-and-plan.md
-│               └── implement-and-review.md
+│               ├── subagent-implement.md
+│               ├── subagent-plan.md
+│               └── subagent-review-loop.md
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json

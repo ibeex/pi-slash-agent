@@ -816,7 +816,6 @@ function getBuiltInAliasBehaviorName(
 	if (agentSource === "built-in") {
 		switch (agentName) {
 			case "general":
-			case "general-purpose":
 				return "worker";
 		}
 	}
@@ -1272,7 +1271,7 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		return box;
 	});
 
-	pi.registerCommand("subagents", {
+	pi.registerCommand("subagent-list", {
 		description: "List available subagents",
 		handler: async (_args, ctx) => {
 			const discovery = discoverAgents(ctx.cwd);
@@ -1517,8 +1516,9 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		return result;
 	};
 
-	pi.registerCommand("handoff", {
-		description: "Show or clear the saved handoff buffer: /handoff [clear]",
+	pi.registerCommand("subagent-buffer", {
+		description:
+			"Show or clear the saved handoff buffer: /subagent-buffer [clear]",
 		handler: async (args, ctx) => {
 			const command = args.trim();
 			if (!command) {
@@ -1530,13 +1530,13 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 				sendHandoffStatus("cleared");
 				return;
 			}
-			ctx.ui.notify("Usage: /handoff [clear]", "warning");
+			ctx.ui.notify("Usage: /subagent-buffer [clear]", "warning");
 		},
 	});
 
-	pi.registerCommand("subagent", {
+	pi.registerCommand("subagent-run", {
 		description:
-			"Run one isolated subagent: /subagent <agent> [--no-handoff] <task>",
+			"Run one isolated subagent: /subagent-run <agent> [--no-handoff] <task>",
 		getArgumentCompletions: (prefix) =>
 			makeAgentCompletions(prefix, currentCwd),
 		handler: async (args, ctx) => {
@@ -1544,7 +1544,7 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 			const parsed = parseCommandArgs(args);
 			if (!parsed) {
 				ctx.ui.notify(
-					"Usage: /subagent <agent> [--no-handoff] <task>",
+					"Usage: /subagent-run <agent> [--no-handoff] <task>",
 					"warning",
 				);
 				return;
@@ -1579,14 +1579,14 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("scout-and-plan", {
+	pi.registerCommand("subagent-plan", {
 		description:
-			"Run scout, then pass its findings to planner: /scout-and-plan <task>",
+			"Run scout, then pass its findings to planner: /subagent-plan <task>",
 		handler: async (args, ctx) => {
 			rememberCwd(ctx.cwd);
 			const task = parseTaskArgs(args);
 			if (!task) {
-				ctx.ui.notify("Usage: /scout-and-plan <task>", "warning");
+				ctx.ui.notify("Usage: /subagent-plan <task>", "warning");
 				return;
 			}
 
@@ -1600,12 +1600,12 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 					"scout",
 					task,
 					currentSessionModel,
-					"Workflow scout-and-plan",
+					"Workflow subagent-plan",
 				);
 				saveHandoffFromResult(scoutResult, false);
 				if (didSubagentFail(scoutResult)) {
 					ctx.ui.notify(
-						"/scout-and-plan stopped because scout failed.",
+						"/subagent-plan stopped because scout failed.",
 						"warning",
 					);
 					return;
@@ -1617,7 +1617,7 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 					"planner",
 					buildPlannerTask(task, scoutResult.finalOutput),
 					currentSessionModel,
-					"Workflow scout-and-plan",
+					"Workflow subagent-plan",
 				);
 				saveHandoffFromResult(plannerResult, false);
 			} finally {
@@ -1626,14 +1626,14 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("implement", {
+	pi.registerCommand("subagent-implement", {
 		description:
-			"Run scout, planner, then worker with automatic handoff: /implement <task>",
+			"Run scout, planner, then worker with automatic handoff: /subagent-implement <task>",
 		handler: async (args, ctx) => {
 			rememberCwd(ctx.cwd);
 			const task = parseTaskArgs(args);
 			if (!task) {
-				ctx.ui.notify("Usage: /implement <task>", "warning");
+				ctx.ui.notify("Usage: /subagent-implement <task>", "warning");
 				return;
 			}
 
@@ -1647,11 +1647,14 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 					"scout",
 					task,
 					currentSessionModel,
-					"Workflow implement",
+					"Workflow subagent-implement",
 				);
 				saveHandoffFromResult(scoutResult, false);
 				if (didSubagentFail(scoutResult)) {
-					ctx.ui.notify("/implement stopped because scout failed.", "warning");
+					ctx.ui.notify(
+						"/subagent-implement stopped because scout failed.",
+						"warning",
+					);
 					return;
 				}
 
@@ -1661,12 +1664,12 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 					"planner",
 					buildPlannerTask(task, scoutResult.finalOutput),
 					currentSessionModel,
-					"Workflow implement",
+					"Workflow subagent-implement",
 				);
 				saveHandoffFromResult(plannerResult, false);
 				if (didSubagentFail(plannerResult)) {
 					ctx.ui.notify(
-						"/implement stopped because planner failed.",
+						"/subagent-implement stopped because planner failed.",
 						"warning",
 					);
 					return;
@@ -1682,7 +1685,7 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 						plannerResult.finalOutput,
 					),
 					currentSessionModel,
-					"Workflow implement",
+					"Workflow subagent-implement",
 				);
 				saveHandoffFromResult(workerResult, false);
 			} finally {
@@ -1691,14 +1694,14 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("implement-and-review", {
+	pi.registerCommand("subagent-review-loop", {
 		description:
-			"Run worker, reviewer, then worker with automatic handoff: /implement-and-review <task>",
+			"Run worker, reviewer, then worker with automatic handoff: /subagent-review-loop <task>",
 		handler: async (args, ctx) => {
 			rememberCwd(ctx.cwd);
 			const task = parseTaskArgs(args);
 			if (!task) {
-				ctx.ui.notify("Usage: /implement-and-review <task>", "warning");
+				ctx.ui.notify("Usage: /subagent-review-loop <task>", "warning");
 				return;
 			}
 
@@ -1712,12 +1715,12 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 					"worker",
 					task,
 					currentSessionModel,
-					"Workflow implement-and-review",
+					"Workflow subagent-review-loop",
 				);
 				saveHandoffFromResult(workerResult, false);
 				if (didSubagentFail(workerResult)) {
 					ctx.ui.notify(
-						"/implement-and-review stopped because worker failed.",
+						"/subagent-review-loop stopped because worker failed.",
 						"warning",
 					);
 					return;
@@ -1729,12 +1732,12 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 					"reviewer",
 					buildReviewerTask(task, workerResult.finalOutput),
 					currentSessionModel,
-					"Workflow implement-and-review",
+					"Workflow subagent-review-loop",
 				);
 				saveHandoffFromResult(reviewerResult, false);
 				if (didSubagentFail(reviewerResult)) {
 					ctx.ui.notify(
-						"/implement-and-review stopped because reviewer failed.",
+						"/subagent-review-loop stopped because reviewer failed.",
 						"warning",
 					);
 					return;
@@ -1750,7 +1753,7 @@ export default function slashSubagentExtension(pi: ExtensionAPI) {
 						reviewerResult.finalOutput,
 					),
 					currentSessionModel,
-					"Workflow implement-and-review",
+					"Workflow subagent-review-loop",
 				);
 				saveHandoffFromResult(revisedWorkerResult, false);
 			} finally {
